@@ -29,6 +29,7 @@ SRC_URI = "git://${KERNEL_REPO};name=machine;branch=${KBRANCH} \
            ${@'file://disable-fw-user-helper.cfg' if d.getVar('KERNEL_DISABLE_FW_USER_HELPER') == 'y' else ''} \
            ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'file://systemd.cfg', '', d)} \
            ${@'file://wireless_regdb.cfg' if d.getVar('KERNEL_INTERNAL_WIRELESS_REGDB') == '1' else ''} \
+	   ${@'file://dm-crypt.cfg' if 'cryptparts' in d.getVar('MACHINEOVERRIDES').split(':') else ''} \
 "
 
 KBUILD_DEFCONFIG = "tegra_defconfig"
