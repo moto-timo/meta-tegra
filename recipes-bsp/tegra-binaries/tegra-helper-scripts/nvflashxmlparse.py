@@ -37,6 +37,7 @@ class Partition(object):
     def __init__(self, element, sector_size, curpos, partnum, bootdev, ignore_id):
         self.name = element.get('name')
         self.type = element.get('type')
+        self.encrypted = element.get('encrypted')
         default_id = None if self.is_partition_table() else partnum
         self.id = default_id if ignore_id else element.get('id', default_id)
         self.oem_sign = element.get('oemsign', 'false') == 'true'
@@ -82,8 +83,8 @@ class Partition(object):
 
         fname = element.find('filename')
         self.filename = "" if fname is None else fname.text.strip()
-        logging.info("Partition {}: id={}, type={}, start={}, size={}".format(self.name, self.id, self.type,
-                                                                              self.start_location, self.size))
+        logging.info("Partition {}: id={}, type={}, encrypted={}, start={}, size={}".format(self.name, self.id, self.type,
+                                                                                     self.encrypted, self.start_location, self.size))
 
     def filltoend(self):
         return (self.alloc_attr & 0x800) == 0x800
