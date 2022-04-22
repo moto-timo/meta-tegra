@@ -22,14 +22,24 @@ IMAGE_TYPES += "encrypted"
 UNENCRYPTED_BOOT_PART ?= "1"
 GEN_LUKS_PASSPHRASE_ARGS ?= "--context-string ${CRYPTSETUP_FSUUID} --generic-pass"
 #GEN_LUKS_PASSPHRASE_ARGS ?= "--context-string ${CRYPTSETUP_FSUUID} --unique-pass --key-file ${USER_KEY_FOR_EKS} --ecid ${ECID}"
-GEN_LUKS_PASSPHRASE_CMD ?= "$(oe-run-native gen-luks-passphrase-native gen-luks-passphrase.py ${GEN_LUKS_PASSPHRASE_ARGS})"
-CRYPTSETUP_BIN ?= "$(oe-run-native cryptsetup-native cryptsetup)"
+GEN_LUKS_PASSPHRASE_BIN ?= "${STAGING_SBINDIR_NATIVE}/gen_luks_passphrase.py"
+GEN_LUKS_PASSPHRASE_CMD ?= "${GEN_LUKS_PASSPHRASE_BIN} ${GEN_LUKS_PASSPHRASE_ARGS}"
+CRYPTSETUP_BIN ?= "${STAGING_SBINDIR_NATIVE}/cryptsetup"
 #CRYPTSETUP_BIN = "$(which cryptsetup)"
 CRYPTSETUP_DEVICE_TYPE ?= "luks1"
 CRYPTSETUP_CIPHER ?= "aes-cbc-essiv:sha256"
-CRYPTSETUP_FSUUID ?= "$(oe-run-native  util-linux-native uuidgen)"
+UUIDGEN_BIN ?= "${STAGING_BINDIR_NATIVE}/uuidgen"
+CRYPTSETUP_FSUUID ?= ""
 CRYPTSETUP_KEY_SIZE ?= "128"
 fstype ?= "ext4"
+
+get_disk_uuid () {
+    if [ "${CRYPTSETUP_FSUUID}" == "" ]; then
+        ${UUIDGEN_BIN}
+    else
+        ${CRYPTSETUP_FSUUID}
+    fi
+}
 
 IMAGE_CMD_encrypted () {
         # Create initial disk image
@@ -50,20 +60,31 @@ IMAGE_CMD_encrypted () {
         bbdebug 1 "Actual Partion size: `stat -c '%s' ${encrypted_rootfs_file}`"
 
         # Create loopback device
-	bbdebug 1 Executing "sudo losetup --show -f '${encrypted_rootfs_file}'"
-        loop_dev="$(sudo losetup --show -f "${encrypted_rootfs_file}")"
+        # NOTE: we cannot run sudo in bitbake recipes, so you must first
+        # sudo chown $(id -u):$(id -g) $(losetup -f)
+	bbdebug 1 Executing "losetup --show -f '${encrypted_rootfs_file}'"
+        loop_dev="$(losetup --show -f "${encrypted_rootfs_file}")"
 
         local encrypted_root_dm="tegra_encrypted_root"
         local encrypted_root_dm_dev="/dev/mapper/${encrypted_root_dm}"
 
+        eval local disk_uuid=`${UUIDGEN_BIN}`
+	echo -n -e "${disk_uuid}" > ${encrypted_rootfs_file}.uuid
+
+	eval local passphrase=`${GEN_LUKS_PASSPHRASE_CMD}`
+
         # Add the LUKS header.
-        eval ${GEN_LUKS_PASSPHRASE_CMD} | ${CRYPTSETUP_BIN} \
+        bbdebug 1 "disk_uuid = ${disk_uuid}"
+	bbdebug 1 "loop_dev = ${loop_dev}"
+	bbdebug 1 "passphrase = ${passphrase}"
+        echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
                 --type ${CRYPTSETUP_DEVICE_TYPE} \
                 --cipher ${CRYPTSETUP_CIPHER} \
                 --key-size ${CRYPTSETUP_KEY_SIZE} \
-                --uuid "${CRYPTSETUP_FSUUID}" \
+                --uuid ${disk_uuid} \
                 luksFormat \
                 ${loop_dev}
+	bbdebug 1 "${GEN_LUKS_PASSPHRASE_CMD}"
 	#||
         #bbfatal "Adding LUKS header to ${encrypted_rootfs_file} failed. ${$?}"
 
@@ -72,7 +93,7 @@ IMAGE_CMD_encrypted () {
                 umount ${encrypted_root_dm_dev}
                 ${CRYPTSETUP_BIN} luksClose ${encrypted_root_dm}
         fi
-        eval ${GEN_LUKS_PASS_CMD} | ${CRYPTSETUP_BIN} \
+        echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
                 luksOpen ${loop_dev} ${encrypted_root_dm} ||
         bbfatal "Unlocking ${encrypted_rootfs_file} failed."
 
