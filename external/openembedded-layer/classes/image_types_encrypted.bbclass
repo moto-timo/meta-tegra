@@ -7,21 +7,27 @@
 # Inspired by disk_encryption_helper.func and flash.sh from L4T 32.7.1
 #
 # Portions borrowed from image_types.bbclass
+#
+# Because of the elevated privileges needed for losetup, cryptsetup, etc.
+# you must setup your user with no password sudo privileges.
+# $ cat /etc/sudoers.d/<username>
+# <username> ALL=(ALL) NOPASSWD: ALL
 
 inherit image_types
 
-DEPENDS:append = " cryptsetup-native util-linux-native"
+DEPENDS:append = " cryptsetup-native gen-luks-passphrase-native util-linux-native"
 
 IMAGE_TYPES += "encrypted"
 
 UNENCRYPTED_BOOT_PART ?= "1"
 GEN_LUKS_PASSPHRASE_ARGS ?= "--context-string ${CRYPTSETUP_FSUUID} --generic-pass"
 #GEN_LUKS_PASSPHRASE_ARGS ?= "--context-string ${CRYPTSETUP_FSUUID} --unique-pass --key-file ${USER_KEY_FOR_EKS} --ecid ${ECID}"
-GEN_LUKS_PASSPHRASE_CMD ?= "$(oe-run-native gen-luks-passphrase gen-luks-passphrase.py ${GEN_LUKS_PASSPHRASE_ARGS})"
-CRYPTSETUP_BIN ?= "$(oe-run-native cryptsetup cryptsetup)"
+GEN_LUKS_PASSPHRASE_CMD ?= "$(oe-run-native gen-luks-passphrase-native gen-luks-passphrase.py ${GEN_LUKS_PASSPHRASE_ARGS})"
+CRYPTSETUP_BIN ?= "$(oe-run-native cryptsetup-native cryptsetup)"
+#CRYPTSETUP_BIN = "$(which cryptsetup)"
 CRYPTSETUP_DEVICE_TYPE ?= "luks1"
 CRYPTSETUP_CIPHER ?= "aes-cbc-essiv:sha256"
-CRYPTSETUP_FSUUID ?= "$(oe-run-native  util-linux-libuuid uuidgen)"
+CRYPTSETUP_FSUUID ?= "$(oe-run-native  util-linux-native uuidgen)"
 CRYPTSETUP_KEY_SIZE ?= "128"
 fstype ?= "ext4"
 
@@ -44,8 +50,8 @@ IMAGE_CMD_encrypted () {
         bbdebug 1 "Actual Partion size: `stat -c '%s' ${encrypted_rootfs_file}`"
 
         # Create loopback device
-	bbdebug 1 Executing "losetup --show -f '${encrypted_rootfs_file}'"
-        loop_dev="$(losetup --show -f "${encrypted_rootfs_file}")"
+	bbdebug 1 Executing "sudo losetup --show -f '${encrypted_rootfs_file}'"
+        loop_dev="$(sudo losetup --show -f "${encrypted_rootfs_file}")"
 
         local encrypted_root_dm="tegra_encrypted_root"
         local encrypted_root_dm_dev="/dev/mapper/${encrypted_root_dm}"
@@ -57,8 +63,9 @@ IMAGE_CMD_encrypted () {
                 --key-size ${CRYPTSETUP_KEY_SIZE} \
                 --uuid "${CRYPTSETUP_FSUUID}" \
                 luksFormat \
-                ${loop_dev} ||
-        bbfatal "Adding LUKS header to ${encrypted_rootfs_file} failed."
+                ${loop_dev}
+	#||
+        #bbfatal "Adding LUKS header to ${encrypted_rootfs_file} failed. ${$?}"
 
         # Unlock the encrypted filesystem image.
         if [ -e "${encrypted_root_dm_dev}" ]; then
@@ -97,7 +104,7 @@ IMAGE_CMD_encrypted () {
 
         umount mnt > /dev/null 2>&1
         ${CRYPTSETUP_BIN} luksClose ${encrypted_root_dm}
-        losetup -d "${loop_dev}" > /dev/null 2>&1
+        sudo losetup -d "${loop_dev}" > /dev/null 2>&1
         rmdir mnt > /dev/null 2>&1
 
 	bbdebug 1 "Converting RAW image to Sparse image... "
