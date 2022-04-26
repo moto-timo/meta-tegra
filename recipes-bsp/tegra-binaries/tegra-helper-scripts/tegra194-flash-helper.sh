@@ -9,10 +9,14 @@ no_flash=0
 flash_cmd=
 imgfile=
 dataimg=
+bootpartimg=
+enc_imgfile=
+enc_dataimg=
+unique_pass=no
 inst_args=""
 blocksize=4096
 
-ARGS=$(getopt -n $(basename "$0") -l "bup,no-flash,sdcard,spi-only,datafile:,usb-instance:,user_key:" -o "u:v:s:b:B:yc:" -- "$@")
+ARGS=$(getopt -n $(basename "$0") -l "bup,no-flash,sdcard,spi-only,datafile:,usb-instance:,user_key:,encrypted,ecid:" -o "u:v:s:b:B:yc:" -- "$@")
 if [ $? -ne 0 ]; then
     echo "Error parsing options" >&2
     exit 1
@@ -50,6 +54,20 @@ while true; do
 	    ;;
 	--user_key)
 	    user_keyfile="$2"
+	    # sed -e 's/ 0x//g' -e 's/0x//' user_key_for_flash_hex_file
+	    # to make the equivalent user_key_for_eks_hex_filet
+	    shift 2
+	    ;;
+	--encrypted)
+	    encrypted=yes
+	    shift
+	    ;;
+	--ecid)
+	    ecid="$2"
+	    shift 2
+	    ;;
+	--unique-pass)
+	    unique_pass=yes
 	    shift 2
 	    ;;
 	-u)
