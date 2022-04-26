@@ -275,6 +275,44 @@ tegraflash_create_flash_config_tegra194() {
         > $destdir/flash.xml.in
 }
 
+tegraflash_create_flash_config_tegra194_cryptparts() {
+    local destdir="$1"
+    local lnxfile="$2"
+    local cbotag
+
+    # The following sed expression are derived from xxx_TAG variables
+    # in the L4T flash.sh script.  Tegra194-specific.
+    if [ -e cbo.dtb ]; then
+	cbotag="-es,CBOOTOPTION_FILE,cbo.dtb,"
+    else
+	cbotag="-e/CBOOTOPTION_FILE/d"
+    fi
+    cat "${STAGING_DATADIR}/tegraflash/${PARTITION_LAYOUT_TEMPLATE}" | sed \
+	-e"s,LNXFILE,$lnxfile," -e"s,LNXSIZE,${LNXSIZE}," \
+	-e"s,TEGRABOOT,nvtboot_t194.bin," \
+	-e"s,MTSPREBOOT,preboot_c10_prod_cr.bin," \
+	-e"s,MTS_MCE,mce_c10_prod_cr.bin," \
+	-e"s,MTSPROPER,mts_c10_prod_cr.bin," \
+	-e"s,MB1FILE,mb1_t194_prod.bin," \
+	-e"s,BPFFILE,bpmp_t194.bin," \
+	-e"s,TBCFILE,${CBOOTFILENAME}," \
+	-e"s,CAMERAFW,camera-rtcpu-rce.img," \
+	-e"s,DRAMECCTYPE,dram_ecc," -e"s,DRAMECCFILE,dram-ecc-t194.bin," -e"s,DRAMECCNAME,dram-ecc-fw," \
+	-e"s,SPEFILE,spe_t194.bin," \
+	-e"s,WB0BOOT,warmboot_t194_prod.bin," \
+	-e"s,TOSFILE,${TOSIMGFILENAME}," \
+	-e"s,EKSFILE,eks.img," \
+	$cbotag \
+	-e"s,RECNAME,recovery," -e"s,RECSIZE,66060288," -e"s,RECDTB-NAME,recovery-dtb," -e"s,BOOTCTRLNAME,kernel-bootctrl," \
+	-e"/RECFILE/d" -e"/RECDTB-FILE/d" -e"/BOOTCTRL-FILE/d" \
+	-e"s,APPSIZE,${ROOTFSPART_SIZE}," \
+	-e"s,APPSIZE_ENC,${ROOTFSPART_SIZE}," \
+	-e"s,RECROOTFSSIZE,${RECROOTFSSIZE}," \
+	-e"s,SMDFILE,${SMDFILE}," \
+	-e"s,APPUUID,," \
+	> $destdir/flash.xml.in
+}
+
 BOOTFILES = ""
 BOOTFILES_tegra210 = "\
     cboot_rb.bin \
