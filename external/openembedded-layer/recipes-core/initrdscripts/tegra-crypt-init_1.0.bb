@@ -13,6 +13,15 @@ COMPATIBLE_MACHINE = "(tegra)"
 
 S = "${WORKDIR}"
 
+do_populate_crypttab() {
+    # TODO: check var and varFlags exist and are valid uuid.
+    echo "crypt_root UUID=${@d.getVarFlag('CRYPTSETUP_DISKUUID', 'APP_ENC')}" \
+        > ${WORKDIR}/crypttab.tmp
+    echo "crypt_UDA UUID=${@d.getVarFlag('CRYPTSETUP_DISKUUID', 'UDA')}" \
+        >> ${WORKDIR}/crypttab.tmp
+}
+addtask populate_crypttab before do_install
+
 do_install() {
     install -m 0755 ${WORKDIR}/init-crypt-boot.sh ${D}/init
     install -m 0555 -d ${D}/proc ${D}/sys
@@ -29,6 +38,9 @@ do_install() {
     fi
     if [ -e ${WORKDIR}/platform-pre-switchroot.sh ]; then
         install -m 0644 ${WORKDIR}/platform-pre-switchroot.sh ${D}${sysconfdir}/platform-pre-switchroot
+    fi
+    if [ -e ${WORKDIR}/crypttab.tmp ]; then
+	install -m 0644 ${WORKDIR}/crypttab.tmp ${D}${sysconfdir}/crypttab
     fi
 }
 
