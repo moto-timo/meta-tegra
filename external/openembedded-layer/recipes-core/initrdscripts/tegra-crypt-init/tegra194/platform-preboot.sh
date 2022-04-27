@@ -23,18 +23,15 @@ if [ -e "/etc/crypttab" ]; then
                 enc_dev=$(blkid | grep -E "${crypt_disk_uuid}" | awk -F ":" '{print $1}');
 
                 # isLuks
-                LD_LIBRARY_PATH="/lib/cryptsetup" \
-                        /lib/cryptsetup/ld-linux-aarch64.so.1 \
-                        /sbin/cryptsetup isLuks "${enc_dev}";
+                /usr/sbin/cryptsetup isLuks "${enc_dev}";
                 if [ $? -ne 0 ]; then
                         echo "ERROR: encrypted dev ${enc_dev} is not LUKS device.";
                         exec /bin/bash;
                 fi;
 
                 # Unlock the encrypted dev
-                luks-srv-app -u -c "${crypt_disk_uuid}" | LD_LIBRARY_PATH="/lib/cryptsetup" \
-                        /lib/cryptsetup/ld-linux-aarch64.so.1 \
-                        /sbin/cryptsetup luksOpen "${enc_dev}" "${enc_dm_name}";
+                luks-srv-app -u -c "${crypt_disk_uuid}" |
+                        /usr/sbin/cryptsetup luksOpen "${enc_dev}" "${enc_dm_name}";
                 if [ $? -ne 0 ]; then
                         echo "ERROR: fail to unlock the encrypted dev ${enc_dev}.";
                         exec /bin/bash;
