@@ -75,7 +75,9 @@ do_install() {
 
     install -m 0755 ${S}/l4t_sign_image.sh ${D}${BINDIR}
     sed -i -e's,^\(L4T_BOOTLOADER_DIR=.*\)/bootloader,\1,' ${D}${BINDIR}/l4t_sign_image.sh
-    install -m 0755 ${S}/tools/disk_encryption/gen_luks_passphrase.py ${D}${BINDIR}
+    install -d ${D}${BINDIR}/disk_encryption
+    install -m 0755 ${S}/tools/disk_encryption/gen_luks_passphrase.py ${D}${BINDIR}/disk_encryption/
+    install -m 0644 ${S}/tools/disk_encryption/disk_encryption_helper.func ${D}${BINDIR}/disk_encryption/
 }
 
 INHIBIT_SYSROOT_STRIP = "1"
