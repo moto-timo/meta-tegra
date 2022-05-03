@@ -39,3 +39,6 @@ L4T_BSP_PREFIX = "Jetson"
 L4T_DEB_SOCNAME = "t194"
 
 NVPMODEL ?= "nvpmodel_t194"
+
+IMAGE_CLASSES += "${@'image_types_bootpart' if 'cryptparts' in d.getVar('MACHINEOVERRIDES').split(':') and d.getVar('CRYPTSETUP_UNENCRYPTED_BOOTPART') == '1' else ''}"
+IMAGE_FSTYPES +="${@'bootpart' if 'cryptparts' in d.getVar('MACHINEOVERRIDES').split(':') and d.getVar('CRYPTSETUP_UNENCRYPTED_BOOTPART') == '1' else ''}"
