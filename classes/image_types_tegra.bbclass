@@ -1,6 +1,7 @@
 inherit image_types image_types_cboot python3native perlnative
 
 IMAGE_TYPES += "tegraflash"
+IMAGE_TYPES += "${@'tar.gz' if 'cryptparts' in d.getVar('MACHINEOVERRIDES') else ''}"
 
 IMAGE_ROOTFS_ALIGNMENT ?= "4"
 
@@ -17,6 +18,39 @@ TEGRA_SIGNING_ARGS ??= ""
 TEGRA_SIGNING_ENV ??= ""
 TEGRA_SIGNING_EXCLUDE_TOOLS ??= ""
 TEGRA_SIGNING_EXTRA_DEPS ??= ""
+
+# To avoid needing to get uid from the device, set all the following
+# TEGRA_DISK_ENCRYPTION_VARS = "\
+#       FAB=${FAB} \
+#       BOARDID=${BOARDID} \
+#       BOARDSKU=${BOARDSKU} \
+#       BOARDREV=${BOARDREV} \
+#       CHIPREV=${CHIPREV} \
+#       BR_CID=${BR_CID}"
+# doflash.sh will perform the disk encryption on host
+#
+# Example: FAB=400 BOARDID=2888 BOARDSKU=0001 BOARDREV=L.0 CHIPREV=2
+#          BR_CID=0x88021911234567890123456789012345
+#                  | 7 dig |
+#                  >  soc  <
+#                  |0000000 +       25 hex          |
+#                  >                 ecid           <
+#
+# NOTE: disk encryption is per device, so you would need to change BR_CID to
+#       reflect the specific device. The ECID needed for generating the LUKS
+#       passphrase is derived from the BR_CID.
+TEGRA_DISK_ENCRYPTION_VARS ??= ""
+
+# Assuming you have set the extended version of _VARS above
+# TEGRA_DISK_ENCRYPTION_ARGS ??= "--no-flash --encrypted"
+# After the encryption is performed, doflash.sh will flash the device
+TEGRA_DISK_ENCRYPTION_ARGS ??= ""
+
+# We need a separate variable, since the most efficient way to encrypt the
+# rootfs is setting:
+# IMAGE_TEGRAFLASH_FS_TYPE = "tar.gz"
+# and processing the tarball (skips needing a second loop device for ext4)
+TEGRA_DISK_ENCRYPTION_FS_TYPE ??= "ext4"
 
 TEGRA_BUPGEN_SPECS ??= "boardid=${TEGRA_BOARDID};fab=${TEGRA_FAB};boardrev=${TEGRA_BOARDREV};chiprev=${TEGRA_CHIPREV}"
 TEGRA_BUPGEN_STRIP_IMG_NAMES ??= ""
@@ -276,6 +310,19 @@ tegraflash_create_flash_config_tegra194() {
 }
 
 tegraflash_create_flash_config_tegra194_cryptparts() {
+    # FIXME: need to handle signing and secureflash.xml
+    # We need xmllint to query the flash.xml
+    if [ -z "$(which xmllint)" ]; then
+	bbfatal "missing xmllint, install with 'sudo apt install libxml2-utils'"
+    fi
+    # We need xmlstarlet to edit the flash.xml
+    if [ -z "$(which xmlstarlet)" ]; then
+	bbfatal "missing xmlstarlet, install with 'sudo apt install xmlstarlet'"
+    fi
+    local encrypted_partition_names="${@' '.join(key for key in d.getVarFlags('CRYPTSETUP_DISKUUID').keys())}"
+    # Debug
+    bbplain $encrypted_partition_names
+
     local destdir="$1"
     local lnxfile="$2"
     local cbotag
@@ -305,12 +352,44 @@ tegraflash_create_flash_config_tegra194_cryptparts() {
 	$cbotag \
 	-e"s,RECNAME,recovery," -e"s,RECSIZE,66060288," -e"s,RECDTB-NAME,recovery-dtb," -e"s,BOOTCTRLNAME,kernel-bootctrl," \
 	-e"/RECFILE/d" -e"/RECDTB-FILE/d" -e"/BOOTCTRL-FILE/d" \
-	-e"s,APPSIZE,${ROOTFSPART_SIZE}," \
-	-e"s,APPSIZE_ENC,${ROOTFSPART_SIZE}," \
+	-e"s,APPSIZE,${ROOTFS_BOOTPART_SIZE}," \
+	-e"s,APP_ENC_SIZE,${ROOTFSPART_SIZE}," \
 	-e"s,RECROOTFSSIZE,${RECROOTFSSIZE}," \
 	-e"s,SMDFILE,${SMDFILE}," \
-	-e"s,APPUUID,," \
+	-e"s,APPUUID,${@d.getVarFlag('CRYPTSETUP_DISKUUID', 'APP')}," \
+	-e"s,APP_ENC_UUID,${@d.getVarFlag('CRYPTSETUP_DISKUUID', 'APP_ENC')}," \
 	> $destdir/flash.xml.in
+
+    if [ "${@d.getVar('CRYPTSETUP_UNENCRYPTED_BOOTPART')}" -eq "0" ]; then
+        # remove APP partition from stock flash.xml, rootfs will be APP_ENC
+        xmlstarlet edit -L \
+          -d "partition_layout/device[@type='sdmmc_user']/partition[@name='APP']" \
+          $destdir/flash.xml.in
+    fi
+
+    # Insert the encrypted image name ./doflash.sh will create into APP_ENC
+    # partition node
+    xmlstarlet edit -L \
+	  -u "partition_layout/device[@type='sdmmc_user']/partition[@name='APP_ENC']/filename/text()" \
+	  -v " ${IMAGE_BASENAME}.${TEGRA_DISK_ENCRYPTION_FS_TYPE}.encrypted " \
+	  $destdir/flash.xml.in
+
+    # TODO: do some gymnastics with DATAFILE
+    # Insert the encrypted image name ./doflash.sh will create into UDA
+    # partition node
+    xmlstarlet edit -L \
+	  -u "partition_layout/device[@type='sdmmc_user']/partition[@name='UDA']/filename/text()" \
+	  -v " data.${TEGRA_DISK_ENCRYPTION_FS_TYPE}.encrypted " \
+	  $destdir/flash.xml.in
+
+    UDA_UUID="${@d.getVarFlag('CRYPTSETUP_DISKUUID', 'UDA')}"
+    if [ ! -z "${UDA_UUID}" ]; then
+        # Insert <unique_guid> element into UDA partition node
+        xmlstarlet edit -L \
+          -a "partition_layout/device[@type='sdmmc_user']/partition[@name='UDA']/align_boundary" \
+          -t elem -n 'unique_guid' -v " ${UDA_UUID} " \
+          $destdir/flash.xml.in
+    fi
 }
 
 BOOTFILES = ""
@@ -582,10 +661,22 @@ create_tegraflash_pkg_tegra194() {
     cp "${IMAGE_TEGRAFLASH_ROOTFS}" ./${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
     tegraflash_create_flash_config "${WORKDIR}/tegraflash" ${LNXFILE}
     rm -f doflash.sh
-    cat > doflash.sh <<END
+    if [ -n "${TEGRA_DISK_ENCRYPTION_VARS}" ]; then
+	bbplain "TEGRA_DISK_ENCRYPTION_VARS='${TEGRA_DISK_ENCRYPTION_VARS}'"
+    fi
+    if [ -n "${TEGRA_DISK_ENCRYPTION_ARGS}" ]; then
+        bbplain "TEGRA_DISK_ENCRYPTION_ARGS='${TEGRA_DISK_ENCRYPTION_ARGS}'"
+        bbplain "${@'meta-oe present' if 'openembedded-layer' in d.getVar('BBFILE_COLLECTIONS') else 'meta-oe not present'}"
+        cat > doflash.sh <<END
+#!/bin/sh
+${TEGRA_DISK_ENCRYPTION_VARS} MACHINE=${MACHINE} ./tegra194-flash-helper.sh ${TEGRA_DISK_ENCRYPTION_ARGS} $DATAARGS flash.xml.in ${DTBFILE} ${MACHINE}.cfg,${MACHINE}-override.cfg ${ODMDATA} ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE} "\$@"
+END
+    else
+        cat > doflash.sh <<END
 #!/bin/sh
 MACHINE=${MACHINE} ./tegra194-flash-helper.sh $DATAARGS flash.xml.in ${DTBFILE} ${MACHINE}.cfg,${MACHINE}-override.cfg ${ODMDATA} ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE} "\$@"
 END
+    fi
     chmod +x doflash.sh
     if [ -e ./odmfuse_pkc.xml ]; then
         cat > burnfuses.sh <<END
