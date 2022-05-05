@@ -65,7 +65,7 @@ while true; do
 	    ;;
 	--unique-pass)
 	    unique_pass=yes
-	    shift 2
+	    shift
 	    ;;
 	-u)
 	    keyfile="$2"
