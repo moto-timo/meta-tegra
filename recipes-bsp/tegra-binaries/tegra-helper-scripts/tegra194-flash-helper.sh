@@ -3,6 +3,7 @@ bup_blob=0
 keyfile=
 sbk_keyfile=
 user_keyfile=
+user_keyfile_for_eks=
 spi_only=
 sdcard=
 no_flash=0
@@ -16,7 +17,7 @@ unique_pass=no
 inst_args=""
 blocksize=4096
 
-ARGS=$(getopt -n $(basename "$0") -l "bup,no-flash,sdcard,spi-only,datafile:,usb-instance:,user_key:,encrypted,ecid:" -o "u:v:s:b:B:yc:" -- "$@")
+ARGS=$(getopt -n $(basename "$0") -l "bup,no-flash,sdcard,spi-only,datafile:,usb-instance:,user_key:,encrypted,unique-pass" -o "u:v:s:b:B:yc:" -- "$@")
 if [ $? -ne 0 ]; then
     echo "Error parsing options" >&2
     exit 1
@@ -55,16 +56,12 @@ while true; do
 	--user_key)
 	    user_keyfile="$2"
 	    # sed -e 's/ 0x//g' -e 's/0x//' user_key_for_flash_hex_file
-	    # to make the equivalent user_key_for_eks_hex_filet
+	    # to make the equivalent user_key_for_eks_hex_file
 	    shift 2
 	    ;;
 	--encrypted)
 	    encrypted=yes
 	    shift
-	    ;;
-	--ecid)
-	    ecid="$2"
-	    shift 2
 	    ;;
 	--unique-pass)
 	    unique_pass=yes
@@ -109,6 +106,21 @@ while true; do
     esac
 done
 
+chkerr()
+{
+	if [ $? -ne 0 ]; then
+		if [ "$1" != "" ]; then
+			echo "$1" >&2;
+		else
+			echo "failed." >&2;
+		fi;
+		exit 1;
+	fi;
+	if [ "$1" = "" ]; then
+		echo "done.";
+	fi;
+}
+
 flash_in="$1"
 dtb_file="$2"
 sdramcfg_files="$3"
@@ -138,7 +150,11 @@ cvm_bin=$(mktemp cvm.bin.XXXXX)
 
 skipuid=""
 if [ -z "$CHIPREV" ]; then
-    chipid=`$here/tegrarcm_v2 --uid | grep BR_CID | cut -d' ' -f2`
+    if [ -n "$BR_CID" ]; then
+	chipid=$BR_CID
+    else
+        chipid=`$here/tegrarcm_v2 --uid | grep BR_CID | cut -d' ' -f2`
+    fi
     if [ -z "$chipid" ]; then
 	echo "ERR: could not retrieve chip ID" >&2
 	exit 1
@@ -156,6 +172,7 @@ if [ -z "$CHIPREV" ]; then
 	    ;;
     esac
     CHIPREV="${chipid:5:1}"
+    ECID="$(echo '${chipid}' | sed -E -e 's/^0x//' -e 's/[0-9a-f]{7}/0000000/')"
     skipuid="--skipuid"
 fi
 
@@ -353,6 +370,292 @@ else
     tfcmd=${flash_cmd:-"flash;reboot"}
 fi
 
+if [ "$encrypted" == "yes" ]; then
+    if [ -x $here/disk_encryption/gen_luks_passphrase.py ]; then
+	genpassphrase="$here/disk_encryption/gen_luks_passphrase.py";
+    else
+	hereparent=$(readlink -f "$here/.." 2>/dev/null)
+	if [ -n "$hereparent" -a -x "$hereparent/disk_encryption/gen_luks_passphrase.py" ]; then
+	    genpassphrase="$hereparent/disk_encryption/gen_luks_passphrase.py"
+	fi
+    fi
+    if [ -z "$genpassphrase" ]; then
+	echo "ERR: missing disk_encryption/gen_luks_passphrase.py script" >&2
+	exit 1
+    fi
+    if [ -f $here/disk_encryption/disk_encryption_helper.func ]; then
+	diskenchelper="$here/disk_encryption/disk_encryption_helper.func";
+    else
+	hereparent=$(readlink -f "$here/.." 2>/dev/null)
+	if [ -n "$hereparent" -a -x "$hereparent/disk_encryption/disk_encryption_helper.func" ]; then
+	    diskenchelper="$hereparent/disk_encryption/disk_encryption_helper.func"
+	fi
+    fi
+    if [ -z "$diskenchelper" ]; then
+	echo "ERR: missing disk_encryption/disk_encryption_helper.func" >&2
+	exit 1
+    fi
+    if [ -z "$CRYPTSETUP_BIN" ]; then
+	CRYPTSETUP_BIN=$(which cryptsetup)
+    fi
+    if [ ! -x "$CRYPTSETUP_BIN" ]; then
+        echo "ERR: missing cryptsetup, try 'sudo apt install cryptsetup'" >&2
+	exit 1
+    fi
+    if [ -z "${APP_ENC_UUID}" ]; then
+        APP_ENC_UUID=$(xmllint \
+          --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='APP_ENC']/unique_guid/text()" \
+          $flash_in | tr -d ' ')
+    fi
+    if [ "$unique_guid" == "yes" ]; then
+        if [ -z "$user_keyfile_for_eks" ]; then
+            echo "ERR: --unique-guid requires --user-key user_key_file" >&2
+	    exit 1
+	fi
+	if [ -z "${ECID}" ]; then
+            echo "ERR: --unique-guid requires either BR_CID= variable or connection to the device in recovery mode." >&2
+	    exit 1
+	fi
+	GEN_LUKS_PASSPHRASE_ARGS="--context-string ${APP_ENC_UUID} --unique-pass --key-file $user_keyfile_for_eks --ecid ${ECID}"
+    else
+        GEN_LUKS_PASSPHRASE_ARGS="--context-string ${APP_ENC_UUID} --generic-pass"
+    fi
+    if [ -z "${GEN_LUKS_PASSPHRASE_CMD}" ]; then
+        GEN_LUKS_PASSPHRASE_CMD="${genpassphrase} ${GEN_LUKS_PASSPHRASE_ARGS}"
+    fi
+
+    if [ -z "${ROOTFSPART_SIZE}" ]; then
+        ROOTFSPART_SIZE=$(xmllint \
+          --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='APP_ENC']/size/text()" \
+          $flash_in | tr -d ' ')
+    fi
+
+    source_fstype="tar.gz"
+    fstype="ext4"
+    rm -rf rootfs
+    mkdir -p rootfs
+    pushd rootfs > /dev/null 2>&1
+    echo "DEBUG: Unpacking rootfs..."
+    tar xzf ../${imgfile}
+    chkerr "ERR: Unpacking rootfs tar.gz failed, is ${imgfile} a gzipped tar archive? Try setting IMAGE_TEGRAFLASH_FS_TYPE = \"tar.gz\" in your local.conf for the build."
+    popd
+    IMAGE_ROOTFS=${PWD}/rootfs
+
+    # Create initial disk image
+
+    # If generating an empty image the size of the sparse block should be large
+    # enough to allocate an ext4 filesystem using 4096 bytes per inode, this is
+    # about 60K, so dd needs a minimum count of 60, with bs=1024 (bytes per IO)
+    eval COUNT="0"
+    eval MIN_COUNT="60"
+    let ROOTFS_SIZE=($ROOTFSPART_SIZE / 1024)
+    if [ $ROOTFS_SIZE -lt $MIN_COUNT ]; then
+        eval COUNT="$MIN_COUNT"
+    fi
+
+    base_imgfile=$(echo ${imgfile} | sed -e 's/.tar.gz//')
+    encrypted_rootfs_file="${base_imgfile}.${fstype}.encrypted"
+
+    # Create a sparse image block
+    echo "DEBUG: Executing 'dd if=/dev/zero of=${encrypted_rootfs_file} seek=$ROOTFS_SIZE count=$COUNT bs=1024'"
+    dd if=/dev/zero of=${encrypted_rootfs_file} seek=$ROOTFS_SIZE count=$COUNT bs=1024
+    echo "DEBUG: Actual Rootfs size:  `du -s ${IMAGE_ROOTFS}`"
+    echo "DEBUG: Actual Partion size: `stat -c '%s' ${encrypted_rootfs_file}`"
+
+    # Create loopback device
+    # NOTE: _MUST_ run with sudo/root privileges
+    echo "DEBUG: Executing losetup --show -f '${encrypted_rootfs_file}'"
+    loop_dev="$(losetup --show -f "${encrypted_rootfs_file}")"
+
+    encrypted_root_dm="tegra_encrypted_root"
+    encrypted_root_dm_dev="/dev/mapper/${encrypted_root_dm}"
+
+    disk_uuid="${APP_ENC_UUID}"
+    echo -n -e "${disk_uuid}" > ${encrypted_rootfs_file}.uuid
+
+    echo "DEBUG: ${GEN_LUKS_PASSPHRASE_CMD}"
+    passphrase=`${GEN_LUKS_PASSPHRASE_CMD}`
+
+    CRYPTSETUP_DEVICE_TYPE="luks1"
+    CRYPTSETUP_CIPHER="aes-cbc-essiv:sha256"
+    CRYPTSETUP_KEY_SIZE="128"
+
+    # Add the LUKS header.
+    echo "DEBUG: disk_uuid = ${disk_uuid}"
+    echo "DEBUG: loop_dev = ${loop_dev}"
+    echo "DEBUG: passphrase = ${passphrase}"
+    echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
+            --type ${CRYPTSETUP_DEVICE_TYPE} \
+            --cipher ${CRYPTSETUP_CIPHER} \
+            --key-size ${CRYPTSETUP_KEY_SIZE} \
+            --uuid ${disk_uuid} \
+            luksFormat \
+            ${loop_dev}
+    chkerr "ERR: Adding LUKS header to ${encrypted_rootfs_file} failed. ${$?}"
+
+    # Unlock the encrypted filesystem image.
+    if [ -e "${encrypted_root_dm_dev}" ]; then
+        umount ${encrypted_root_dm_dev}
+        ${CRYPTSETUP_BIN} luksClose ${encrypted_root_dm}
+    fi
+    echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
+            luksOpen ${loop_dev} ${encrypted_root_dm}
+        chkerr "ERR: Unlocking ${encrypted_rootfs_file} failed."
+
+    echo "DEBUG: Executing mkfs.$fstype -F $extra_imagecmd ${encrypted_root_dm_dev}"
+    mkfs.$fstype -F $extra_imagecmd ${encrypted_root_dm_dev} > /dev/null 2>&1
+    chkerr "ERR: Formating ${fstype} filesystem on ${encrypted_root_dm_dev} failed."
+    mkdir -p mnt
+    chkerr "ERR: Making ${encrypted_rootfs_file} mount point failed."
+    mount ${encrypted_root_dm_dev} mnt
+    chkerr "ERR: Mounting ${encrypted_rootfs_file} failed."
+
+    # Processing partition data.
+    if [ "${IMAGE_ROOTFS}" != "" ]; then
+        pushd mnt > /dev/null 2>&1
+        echo "DEBUG: Populating filesystem from ${IMAGE_ROOTFS} ... "
+        if [ "${UNENCRYPTED_BOOT_PART}" == "1" ]; then
+            (cd ${IMAGE_ROOTFS}; tar -cf --exclude /boot - *) | tar xf -
+            chkerr "ERR: Failed to populate file system -- excluding /boot -- from ${IMAGE_ROOTFS}."
+        else
+            (cd ${IMAGE_ROOTFS}; tar -cf - *) | tar xf -
+            chkerr "ERR: Failed to populate file system from ${IMAGE_ROOTFS}."
+        fi
+        popd > /dev/null 2>&1
+    fi;
+
+    echo "DEBUG: Sync'ing ${encrypted_rootfs_file} ... "
+    sync; sync; sleep 5;    # Give FileBrowser time to terminate gracefully.
+    echo "DEBUG: Done."
+
+    echo "DEBUG: Converting RAW image to Sparse image... "
+    mv -f "${encrypted_rootfs_file}" "${encrypted_rootfs_file}.raw"
+    $here/mksparse --fillpattern=0 ${encrypted_rootfs_file}.raw ${encrypted_rootfs_file}
+    chkerr "ERR: Failed to convert raw image to sparse image."
+    echo "DEBUG: Successfully built ${encrypted_rootfs_file}. "
+    echo "DEBUG: Detaching from ${loop_dev}."
+    losetup -d ${loop_dev}
+
+    unset GEN_LUKS_PASSPHRASE_CMD
+    # Create encrypted UDA partition image
+    if [ -z "${UDA_ENC_UUID}" ]; then
+	UDA_ENC_UUID=$(xmllint \
+	  --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='UDA']/unique_guid/text()" \
+	  $flash_in | tr -d ' ')
+    fi
+    if [ "$unique_guid" == "yes" ]; then
+	if [ -z "$user_keyfile_for_eks" ]; then
+	    echo "ERR: --unique-guid requires --user-key user_key_file" >&2
+	    exit 1
+	fi
+	if [ -z "${ECID}" ]; then
+	    echo "ERR: --unique-guid requires either BR_CID= variable or connection to the device in recovery mode." >&2
+	    exit 1
+	fi
+	GEN_LUKS_PASSPHRASE_ARGS="--context-string ${UDA_ENC_UUID} --unique-pass --key-file $user_keyfile_for_eks --ecid ${ECID}"
+    else
+	GEN_LUKS_PASSPHRASE_ARGS="--context-string ${UDA_ENC_UUID} --generic-pass"
+    fi
+    if [ -z "${GEN_LUKS_PASSPHRASE_CMD}" ]; then
+	GEN_LUKS_PASSPHRASE_CMD="${genpassphrase} ${GEN_LUKS_PASSPHRASE_ARGS}"
+    fi
+
+    if [ -z "${UDAPART_SIZE}" ]; then
+	UDAPART_SIZE=$(xmllint \
+	  --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='UDA']/size/text()" \
+	  $flash_in | tr -d ' ')
+    fi
+    # fstype="ext4"
+    # Create initial disk image
+
+    # If generating an empty image the size of the sparse block should be large
+    # enough to allocate an ext4 filesystem using 4096 bytes per inode, this is
+    # about 60K, so dd needs a minimum count of 60, with bs=1024 (bytes per IO)
+    eval COUNT="0"
+    eval MIN_COUNT="60"
+    let DATAFS_SIZE=($UDAPART_SIZE / 1024)
+    if [ $DATAFS_SIZE -lt $MIN_COUNT ]; then
+        eval COUNT="$MIN_COUNT"
+    fi
+
+    encrypted_datafs_file="data.${fstype}.encrypted"
+
+    # Create a sparse image block
+    echo "DEBUG: Executing 'dd if=/dev/zero of=${encrypted_datafs_file} seek=$DATAFS_SIZE count=$COUNT bs=1024'"
+    dd if=/dev/zero of=${encrypted_datafs_file} seek=$DATAFS_SIZE count=$COUNT bs=1024
+    echo "DEBUG: Actual Partion size: `stat -c '%s' ${encrypted_datafs_file}`"
+
+    # Create loopback device
+    # NOTE: _MUST_ run with sudo/root privileges
+    echo "DEBUG: Executing losetup --show -f '${encrypted_datafs_file}'"
+    loop_dev="$(losetup --show -f "${encrypted_datafs_file}")"
+
+    encrypted_data_dm="tegra_encrypted_data"
+    encrypted_data_dm_dev="/dev/mapper/${encrypted_data_dm}"
+
+    disk_uuid="${UDA_ENC_UUID}"
+    echo -n -e "${disk_uuid}" > ${encrypted_datafs_file}.uuid
+
+    echo "DEBUG: ${GEN_LUKS_PASSPHRASE_CMD}"
+    passphrase=`${GEN_LUKS_PASSPHRASE_CMD}`
+
+    # CRYPTSETUP_DEVICE_TYPE="luks1"
+    # CRYPTSETUP_CIPHER="aes-cbc-essiv:sha256"
+    # CRYPTSETUP_KEY_SIZE="128"
+
+    # Add the LUKS header.
+    echo "DEBUG: disk_uuid = ${disk_uuid}"
+    echo "DEBUG: loop_dev = ${loop_dev}"
+    echo "DEBUG: passphrase = ${passphrase}"
+    echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
+	    --type ${CRYPTSETUP_DEVICE_TYPE} \
+	    --cipher ${CRYPTSETUP_CIPHER} \
+	    --key-size ${CRYPTSETUP_KEY_SIZE} \
+	    --uuid ${disk_uuid} \
+	    luksFormat \
+	    ${loop_dev}
+    chkerr "ERR: Adding LUKS header to ${encrypted_datafs_file} failed. ${$?}"
+
+    # Unlock the encrypted filesystem image.
+    if [ -e "${encrypted_data_dm_dev}" ]; then
+	umount ${encrypted_data_dm_dev}
+	${CRYPTSETUP_BIN} luksClose ${encrypted_data_dm}
+    fi
+    echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
+	    luksOpen ${loop_dev} ${encrypted_data_dm}
+	chkerr "ERR: Unlocking ${encrypted_datafs_file} failed."
+
+    echo "DEBUG: Executing mkfs.$fstype -F $extra_imagecmd ${encrypted_data_dm_dev}"
+    mkfs.$fstype -F $extra_imagecmd ${encrypted_data_dm_dev} > /dev/null 2>&1
+    chkerr "ERR: Formating ${fstype} filesystem on ${encrypted_data_dm_dev} failed."
+    mkdir -p mnt
+    chkerr "ERR: Making ${encrypted_datafs_file} mount point failed."
+    mount ${encrypted_data_dm_dev} mnt
+    chkerr "ERR: Mounting ${encrypted_datafs_file} failed."
+
+    # Processing partition data.
+    if [ "${IMAGE_DATAFS}" != "" ]; then
+	pushd mnt > /dev/null 2>&1
+	echo "DEBUG: Populating filesystem from ${IMAGE_DATAFS} ... "
+	(cd ${IMAGE_DATAFS}; tar -cf - *) | tar xf -
+	chkerr "ERR: Failed to populate file system from ${IMAGE_DATAFS}."
+	popd > /dev/null 2>&1
+    fi;
+
+    echo "DEBUG: Sync'ing ${encrypted_datafs_file} ... "
+    sync; sync; sleep 5;    # Give FileBrowser time to terminate gracefully.
+    echo "DEBUG: Done."
+
+    echo "DEBUG: Converting RAW image to Sparse image... "
+    mv -f "${encrypted_datafs_file}" "${encrypted_datafs_file}.raw"
+    $here/mksparse --fillpattern=0 ${encrypted_datafs_file}.raw ${encrypted_datafs_file}
+    chkerr "ERR: Failed to convert raw image to sparse image."
+    echo "DEBUG: Successfully built ${encrypted_datafs_file}. "
+    echo "DEBUG: Detaching from ${loop_dev}."
+    losetup -d ${loop_dev}
+
+fi # end encrypted
+
 temp_user_dir=
 if [ -n "$keyfile" ]; then
     if [ -n "$sbk_keyfile" ]; then
@@ -360,6 +663,14 @@ if [ -n "$keyfile" ]; then
 	    rm -f "null_user_key.txt"
 	    echo "0x00000000 0x00000000 0x00000000 0x00000000" > null_user_key.txt
 	    user_keyfile=$(readlink -f null_user_key.txt)
+	fi
+	if [ -z "$user_keyfile_for_eks" ]; then
+	    rm -f "null_user_key_for_eks.txt"
+	    echo "00000000000000000000000000000000" > null_user_key_for_eks.txt
+	    user_keyfile_for_eks=$(readlink -f null_user_key_for_eks.txt)
+	else
+	    sed -e 's/ 0x//g' -e 's/0x//' $user_keyfile > user_key_for_eks.txt
+	    user_keyfile_for_eks=$(readlink -f user_key_for_eks.txt)
 	fi
 	rm -rf signed_bootimg_dir
 	mkdir signed_bootimg_dir
@@ -394,6 +705,7 @@ if [ -n "$keyfile" ]; then
 	fi
 	temp_user_dir=signed_bootimg_dir
     fi
+
     CHIPID="0x19"
     tegraid="$CHIPID"
     localcfgfile="flash.xml"
