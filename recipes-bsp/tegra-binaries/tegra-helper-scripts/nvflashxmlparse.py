@@ -215,6 +215,7 @@ def main():
         description="""
 Extracts partition information from an NVIDIA flash.xml file
 """)
+    parser.add_argument('-g', '--partname-guid-map', help='dict of partition.name: guid', action='store')
     parser.add_argument('-t', '--type', help='device type to extract information for', action='store')
     parser.add_argument('-l', '--list-types', help='list the device types described in the file', action='store_true')
     parser.add_argument('-e', '--extract', help='generate a new XML file extracting just the specified device type', action='store_true')
