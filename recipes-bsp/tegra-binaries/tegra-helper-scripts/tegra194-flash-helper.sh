@@ -172,7 +172,8 @@ if [ -z "$CHIPREV" ]; then
 	    ;;
     esac
     CHIPREV="${chipid:5:1}"
-    ECID="$(echo '${chipid}' | sed -E -e 's/^0x//' -e 's/[0-9a-f]{7}/0000000/')"
+    ECID="$(echo ${chipid} | sed -E -e 's/^0x//' -e 's/[0-9a-f]{7}/0000000/')"
+    echo "DEBUG: ECID=" ${ECID}
     skipuid="--skipuid"
 fi
 
@@ -407,13 +408,18 @@ if [ "$encrypted" == "yes" ]; then
           --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='APP_ENC']/unique_guid/text()" \
           $flash_in | tr -d ' ')
     fi
-    if [ "$unique_guid" == "yes" ]; then
+    if [ "$unique_pass" == "yes" ]; then
         if [ -z "$user_keyfile_for_eks" ]; then
-            echo "ERR: --unique-guid requires --user-key user_key_file" >&2
-	    exit 1
+	    if [ -z "$user_keyfile" ]; then
+                echo "ERR: --unique-pass requires --user-key user_key_file" >&2
+	        exit 1
+	    else
+	        sed -e 's/ 0x//g' -e 's/0x//' $user_keyfile > user_key_for_eks.txt
+	        user_keyfile_for_eks=$(readlink -f user_key_for_eks.txt)
+	    fi
 	fi
 	if [ -z "${ECID}" ]; then
-            echo "ERR: --unique-guid requires either BR_CID= variable or connection to the device in recovery mode." >&2
+            echo "ERR: --unique-pass requires either BR_CID= variable or connection to the device in recovery mode." >&2
 	    exit 1
 	fi
 	GEN_LUKS_PASSPHRASE_ARGS="--context-string ${APP_ENC_UUID} --unique-pass --key-file $user_keyfile_for_eks --ecid ${ECID}"
@@ -543,13 +549,13 @@ if [ "$encrypted" == "yes" ]; then
 	  --xpath "partition_layout/device[@type='sdmmc_user']/partition[@name='UDA']/unique_guid/text()" \
 	  $flash_in | tr -d ' ')
     fi
-    if [ "$unique_guid" == "yes" ]; then
+    if [ "$unique_pass" == "yes" ]; then
 	if [ -z "$user_keyfile_for_eks" ]; then
-	    echo "ERR: --unique-guid requires --user-key user_key_file" >&2
+	    echo "ERR: --unique-pass requires --user-key user_key_file" >&2
 	    exit 1
 	fi
 	if [ -z "${ECID}" ]; then
-	    echo "ERR: --unique-guid requires either BR_CID= variable or connection to the device in recovery mode." >&2
+	    echo "ERR: --unique-pass requires either BR_CID= variable or connection to the device in recovery mode." >&2
 	    exit 1
 	fi
 	GEN_LUKS_PASSPHRASE_ARGS="--context-string ${UDA_ENC_UUID} --unique-pass --key-file $user_keyfile_for_eks --ecid ${ECID}"
