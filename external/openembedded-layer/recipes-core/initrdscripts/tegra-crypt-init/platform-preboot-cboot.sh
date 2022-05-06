@@ -30,7 +30,7 @@ if [ -e "/etc/crypttab" ]; then
                 fi;
 
                 # Unlock the encrypted dev
-                luks-srv-app -u -c "${crypt_disk_uuid}" |
+                /usr/sbin/luks-srv-app -u -c "${crypt_disk_uuid}" |
                         /usr/sbin/cryptsetup luksOpen "${enc_dev}" "${enc_dm_name}";
                 if [ $? -ne 0 ]; then
                         echo "ERROR: fail to unlock the encrypted dev ${enc_dev}.";
