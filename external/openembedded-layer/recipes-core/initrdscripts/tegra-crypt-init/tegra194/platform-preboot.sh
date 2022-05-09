@@ -26,7 +26,7 @@ if [ -e "/etc/crypttab" ]; then
                 /usr/sbin/cryptsetup isLuks "${enc_dev}";
                 if [ $? -ne 0 ]; then
                         echo "ERROR: encrypted dev ${enc_dev} is not LUKS device.";
-                        exec /bin/bash;
+                        exec sh;
                 fi;
 
                 # Unlock the encrypted dev
@@ -34,7 +34,7 @@ if [ -e "/etc/crypttab" ]; then
                         /usr/sbin/cryptsetup luksOpen "${enc_dev}" "${enc_dm_name}";
                 if [ $? -ne 0 ]; then
                         echo "ERROR: fail to unlock the encrypted dev ${enc_dev}.";
-                        exec /bin/bash;
+                        exec sh;
                 fi;
 
                 if [ ${enc_dev_match_root} -eq 1 ]; then
