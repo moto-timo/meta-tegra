@@ -47,6 +47,7 @@ IMAGE_CMD_bootpart () {
 
 do_image_bootpart[depends] += "tegra-bootfiles:do_populate_sysroot tegra-bootfiles:do_populate_lic \
                                  tegra-redundant-boot-rollback:do_populate_sysroot virtual/kernel:do_deploy \
+				 ${SOC_FAMILY}-flashtools-native:do_populate_sysroot  \
                                  ${@'${INITRD_IMAGE}:do_image_complete' if d.getVar('INITRD_IMAGE') != '' else  ''} \
                                  ${@'${IMAGE_UBOOT}:do_deploy ${IMAGE_UBOOT}:do_populate_lic' if d.getVar('IMAGE_UBOOT') != '' else  ''} \
                                  cboot:do_deploy virtual/secure-os:do_deploy virtual/bootlogo:do_deploy ${TEGRA_SIGNING_EXTRA_DEPS}"
