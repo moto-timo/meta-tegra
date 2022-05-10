@@ -175,6 +175,11 @@ if [ -z "$CHIPREV" ]; then
     ECID="$(echo ${chipid} | sed -E -e 's/^0x//' -e 's/[0-9a-f]{7}/0000000/')"
     echo "DEBUG: ECID=" ${ECID}
     skipuid="--skipuid"
+else
+    if [ -n "$BR_CID" ]; then
+        chipid=$BR_CID
+	ECID="$(echo ${chipid} | sed -E -e 's/^0x//' -e 's/[0-9a-f]{7}/0000000/')"
+    fi
 fi
 
 if [ -z "$FAB" -o -z "$BOARDID" ]; then
@@ -620,7 +625,7 @@ if [ "$encrypted" == "yes" ]; then
 	    --uuid ${disk_uuid} \
 	    luksFormat \
 	    ${loop_dev}
-    chkerr "ERR: Adding LUKS header to ${encrypted_datafs_file} failed. ${$?}"
+    chkerr "ERROR: Adding LUKS header to ${encrypted_datafs_file} failed. ${$?}"
 
     # Unlock the encrypted filesystem image.
     if [ -e "${encrypted_data_dm_dev}" ]; then
@@ -629,22 +634,22 @@ if [ "$encrypted" == "yes" ]; then
     fi
     echo -n ${passphrase} | ${CRYPTSETUP_BIN} \
 	    luksOpen ${loop_dev} ${encrypted_data_dm}
-	chkerr "ERR: Unlocking ${encrypted_datafs_file} failed."
+	chkerr "ERROR: Unlocking ${encrypted_datafs_file} failed."
 
     echo "DEBUG: Executing mkfs.$fstype -F $extra_imagecmd ${encrypted_data_dm_dev}"
     mkfs.$fstype -F $extra_imagecmd ${encrypted_data_dm_dev} > /dev/null 2>&1
-    chkerr "ERR: Formating ${fstype} filesystem on ${encrypted_data_dm_dev} failed."
+    chkerr "ERROR: Formating ${fstype} filesystem on ${encrypted_data_dm_dev} failed."
     mkdir -p mnt
-    chkerr "ERR: Making ${encrypted_datafs_file} mount point failed."
+    chkerr "ERROR: Making ${encrypted_datafs_file} mount point failed."
     mount ${encrypted_data_dm_dev} mnt
-    chkerr "ERR: Mounting ${encrypted_datafs_file} failed."
+    chkerr "ERROR: Mounting ${encrypted_datafs_file} failed."
 
     # Processing partition data.
     if [ "${IMAGE_DATAFS}" != "" ]; then
 	pushd mnt > /dev/null 2>&1
 	echo "DEBUG: Populating filesystem from ${IMAGE_DATAFS} ... "
 	(cd ${IMAGE_DATAFS}; tar -cf - *) | tar xf -
-	chkerr "ERR: Failed to populate file system from ${IMAGE_DATAFS}."
+	chkerr "ERROR: Failed to populate file system from ${IMAGE_DATAFS}."
 	popd > /dev/null 2>&1
     fi;
 
@@ -652,13 +657,23 @@ if [ "$encrypted" == "yes" ]; then
     sync; sync; sleep 5;    # Give FileBrowser time to terminate gracefully.
     echo "DEBUG: Done."
 
+    # Clean up
+    umount mnt > /dev/null 2>&1
+    # first umount doesn't always work, probably because of the sub mnt/
+    # for crypt_UDA being in use
+    umount mnt > /dev/null 2>&1
+    ${CRYPTSETUP_BIN} luksClose ${encrypted_data_dm}
+    losetup -d ${loop_dev} > /dev/null 2>&1
+    rmdir mnt > /dev/null 2>&1
+
+    # Signing needs to happen here before making the sparse image
+
     echo "DEBUG: Converting RAW image to Sparse image... "
     mv -f "${encrypted_datafs_file}" "${encrypted_datafs_file}.raw"
     $here/mksparse --fillpattern=0 ${encrypted_datafs_file}.raw ${encrypted_datafs_file}
-    chkerr "ERR: Failed to convert raw image to sparse image."
+    chkerr "ERROR: Failed to convert raw image to sparse image."
     echo "DEBUG: Successfully built ${encrypted_datafs_file}. "
     echo "DEBUG: Detaching from ${loop_dev}."
-    losetup -d ${loop_dev}
 
 fi # end encrypted
 
