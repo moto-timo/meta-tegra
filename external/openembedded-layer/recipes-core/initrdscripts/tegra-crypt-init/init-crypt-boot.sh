@@ -9,6 +9,8 @@ opt="rw"
 wait=""
 fstype="auto"
 
+echo "Starting OE4T initial RAM disk" > /dev/kmsg;
+
 [ ! -f /etc/platform-preboot ] || . /etc/platform-preboot
 
 if [ -z "$rootdev" ]; then
@@ -23,7 +25,7 @@ if [ -z "$rootdev" ]; then
 fi
 
 if [ -n "$wait" -a ! -b "${rootdev}" ]; then
-    echo "Waiting for ${rootdev}..."
+    echo "Waiting for ${rootdev}..." > /dev/kmsg
     count=0
     while [ $count -lt 25 ]; do
 	test -b "${rootdev}" && break
@@ -31,12 +33,14 @@ if [ -n "$wait" -a ! -b "${rootdev}" ]; then
 	count=`expr $count + 1`
     done
 fi
-echo "Mounting ${rootdev}..."
-mount -t "${fstype}" -o "${opt}" "${rootdev}" /mnt || exec sh
+# Already mounted in platform-preboot
+# check for rootfs in /mnt to be more robust?
+#echo "Mounting ${rootdev}..." > /dev/kmsg
+#mount -t "${fstype}" -o "${opt}" "${rootdev}" /mnt || exec sh
 
 [ ! -f /etc/platform-pre-switchroot ] || . /etc/platform-pre-switchroot
 
-echo "Switching to rootfs on ${rootdev}..."
+echo "Switching to rootfs on ${rootdev}..." > /dev/kmsg
 mount --move /sys  /mnt/sys
 mount --move /proc /mnt/proc
 mount --move /dev  /mnt/dev
