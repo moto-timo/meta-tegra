@@ -231,7 +231,7 @@ tegraflash_custom_sign_pkg() {
     if [ -z "${TEGRA_SIGNING_ARGS}" -a "${TEGRA_SIGNING_ALWAYS}" != "1" ]; then
         return 0
     fi
-    ${TEGRA_SIGNING_ENV} MACHINE=${TNSPEC_MACHINE} ./tegra-flash-helper.sh --sign --no-flash ${TEGRA_SIGNING_ARGS} flash.xml.in ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
+    ${TEGRA_SIGNING_ENV} MACHINE=${TNSPEC_MACHINE} ./tegra-flash-helper.sh --sign --no-flash $DATAARGS ${TEGRA_SIGNING_ARGS} flash.xml.in ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
     mv secureflash.xml internal-secureflash.xml
     mv flash.idx internal-flash.idx
     if ${TEGRA_UNIFIED_FLASH}; then
@@ -246,7 +246,7 @@ tegraflash_custom_sign_pkg() {
 	# here so that the .idx file used by NVIDIA's flashing tools
 	# gets generated.
 	if [ -e external-flash.xml.in ]; then
-            ${TEGRA_SIGNING_ENV} MACHINE=${TNSPEC_MACHINE} ./tegra-flash-helper.sh --sign --no-flash --external-device ${TEGRA_SIGNING_ARGS} external-flash.xml.in ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
+            ${TEGRA_SIGNING_ENV} MACHINE=${TNSPEC_MACHINE} ./tegra-flash-helper.sh --sign --no-flash --external-device $DATAARGS ${TEGRA_SIGNING_ARGS} external-flash.xml.in ${LNXFILE} ${IMAGE_BASENAME}.${IMAGE_TEGRAFLASH_FS_TYPE}
 	    mv secureflash.xml external-secureflash.xml
 	    mv flash.idx external-flash.idx
 	fi
