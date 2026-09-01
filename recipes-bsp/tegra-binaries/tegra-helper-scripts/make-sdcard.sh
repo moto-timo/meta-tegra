@@ -193,6 +193,13 @@ unmount_device() {
     return 0
 }
 
+# Partitions with no <filename> in the layout are created but never written.
+# That is normal for scratch and user-data partitions, but it is also what a
+# lost filename looks like, so say which ones were left alone.
+report_no_content() {
+    printf "  [%02d] name=%s: no image file, not written\n" $partnumber $partname
+}
+
 write_partitions_to_device() {
     local blksize partnumber partname start_location partsize partfile partguid parttype fstype partfilltoend
     local i dest pline destsize filesize n_written
@@ -205,6 +212,7 @@ write_partitions_to_device() {
 	fi
 	eval "$pline"
 	if [ -z "$partfile" ]; then
+	    report_no_content
 	    i=$(expr $i + 1)
 	    continue
 	fi
@@ -266,7 +274,10 @@ write_partitions_to_device() {
 	    echo "ERR: failed to write $partfile to $dest" >&2
 	    return 1
 	fi
+    else
+	report_no_content
     fi
+    return 0
 }
 
 write_partitions_to_image() {
@@ -281,7 +292,10 @@ write_partitions_to_image() {
     i=0
     for pline in "${PARTS[@]}"; do
 	eval "$pline"
-	[ -n "$partfile" ] || continue
+	if [ -z "$partfile" ]; then
+	    report_no_content
+	    continue
+	fi
 	if [ -e "signed/$partfile" ]; then
 	    partfile="signed/$partfile"
 	elif [ ! -e "$partfile" ]; then
